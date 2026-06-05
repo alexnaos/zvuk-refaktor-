@@ -75,6 +75,20 @@ void loop() {
         if (WiFi.status() != WL_CONNECTED) {
             sysLog("warn:", "СЕТЬ", "Связь потеряна! Переподключение...");
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        } else {
+            // ДИНАМИЧЕСКИЙ РОУМИНГ (БЕЗ ХАРДКОДА MAC-АДРЕСА)
+            // Если плата зацепилась за дальний роутер и сигнал хуже -82 dBm
+            if (WiFi.RSSI() < -82) {
+                sysLog("warn:", "РОУМИНГ", "Слишком слабый сигнал: " + String(WiFi.RSSI()) + " dBm. Ищу точку с лучшим приемом...");
+                
+                // Мягко отключаемся от текущего слабого роутера
+                WiFi.disconnect();
+                
+                // Запускаем поиск заново. Сетевой стек ESP32 автоматически отсканирует
+                // эфир вашей сети Sloboda100 и выберет роутер с максимальным уровнем сигнала.
+                // При этом полное резервирование сети сохраняется!
+                WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            }
         }
     }
     
@@ -83,7 +97,17 @@ void loop() {
         if (WiFi.status() == WL_CONNECTED) logSystemHealth();
     }
     
-    if (WiFi.status() == WL_CONNECTED) loopMQTT();
+    if (WiFi.status() == WL_CONNECTED) {
+        loopMQTT();
+        
+        // БЕЗОПАСНАЯ ОТПРАВКА НАЗВАНИЯ ТРЕКА В MQTT
+        // Переменная mqttTrackUpdateFlag создана глобально в audio_playback.cpp.
+        extern bool mqttTrackUpdateFlag; 
+        if (mqttTrackUpdateFlag) {
+            mqttTrackUpdateFlag = false; // Мгновенно сбрасываем флаг
+            mqttPublishTrack(currentTrack.c_str()); // Спокойно отправляем пакет вне аудио-прерывания
+        }
+    }
     
     // Главная аудио-задача: вызывается непрерывно и без задержек!
     loopAudioPlayback();
@@ -94,7 +118,6 @@ void loop() {
         if (currentStationIdx >= 0 && currentStationIdx < stationCount) {
             String url = stationList[currentStationIdx].url;
             
-            // ИСПРАВЛЕНО: Убрана синхронная функция checkUrlAvailability(url).
             // Запуск аудио-потока делается напрямую. Движок Wolle VS1053 сам 
             // асинхронно обработает подключение и вернет ошибку, если сервер лежит.
             updateDisplay(stationList[currentStationIdx].name.c_str(), "Connecting...");

@@ -13,3 +13,5 @@ extern String currentTrack;
 extern String customUrl;
 extern bool changeStationFlag;
 extern bool isRecording;
+extern bool mqttTrackUpdateFlag;
+

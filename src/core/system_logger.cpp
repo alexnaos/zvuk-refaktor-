@@ -30,9 +30,13 @@ void logSystemHealth() {
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t maxBlock = ESP.getMaxAllocHeap();
     
-    // ИСПРАВЛЕНО: Убран синхронный тест-коннект к шлюзу, который вешал loop()
+    // Получаем MAC-адрес (BSSID) роутера, к которому подключены сейчас
+    String currentBssid = WiFi.BSSIDstr();
+    
+    // Формируем детальное сообщение телеметрии
     String msg = "ОЗУ: " + String(freeHeap) + " Б (Блок: " + String(maxBlock) + " Б) | ";
-    msg += "RSSI: " + String(WiFi.RSSI()) + " dBm";
+    msg += "RSSI: " + String(WiFi.RSSI()) + " dBm | ";
+    msg += "Роутер (BSSID): " + currentBssid; // <-- ДОБАВЛЕНО ТУТ
     
     if (freeHeap < 40000) {
         sysLog("warn:", "ДИАГНОСТИКА", msg);
@@ -40,3 +44,4 @@ void logSystemHealth() {
         sysLog("info:", "ДИАГНОСТИКА", msg);
     }
 }
+

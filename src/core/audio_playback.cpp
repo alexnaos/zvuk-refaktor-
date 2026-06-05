@@ -11,18 +11,24 @@ VS1053* player = nullptr;
 // СИСТЕМНЫЕ ПЕРЕХВАТЧИКИ БИБЛИОТЕКИ WOLLE VS1053 (ГЛУБОКАЯ ОТЛАДКА)
 // ============================================================================
 
+// Глобальный флаг для асинхронной отправки MQTT (чтобы не блокировать плеер)
+bool mqttTrackUpdateFlag = false;
+
 void vs1053_showstreamtitle(const char *info) {
     if (info != nullptr) {
         currentTrack = String(info);
         currentTrack.trim();
         
-        // Отправляем реальное название трека в брокер Home Assistant
-        mqttPublishTrack(currentTrack.c_str());
+        // ИСПРАВЛЕНО: Полностью убрана блокирующая функция mqttPublishTrack().
+        // Теперь мы просто поднимаем флаг. Отправка произойдет в loop(),
+        // когда процессор будет свободен от подкачки аудиоданных.
+        mqttTrackUpdateFlag = true;
         
-        // Логируем в ОЗУ для веб-интерфейса
+        // Логируем в ОЗУ для веб-интерфейса (работает мгновенно)
         sysLog("info:", "ДЕКОДЕР", "Трек: " + currentTrack);
     }
 }
+
 
 void vs1053_showstreaminfo(const char *info) {
     if (info != nullptr) {
