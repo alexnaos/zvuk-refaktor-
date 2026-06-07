@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "web_interface.h"
 #include "core/system_logger.h" // Исправленный путь к папке core/
+ #include "esp_task_wdt.h"
 #include <LittleFS.h>
 
 // Физическое выделение памяти под БД и сервер (стр. 13-14 документации)
@@ -31,7 +32,10 @@ void initWebServer() {
     sysLog("info:", "СЕРВЕР", "Веб-сервер успешно запущен.");
 }
 
-
 void handleWebRequests() {
-    sett.tick(); // Вызывается в главном loop (стр. 3 документации)
+    // Каждый раз, когда веб-сервер принимает пакет данных (включая куски OTA-прошивки),
+    // мы нативно сбрасываем счетчик ядра WDT, предотвращая ложный ресет платы.
+       esp_task_wdt_reset(); 
+   
+    sett.tick(); // Вызывается в главном loop
 }

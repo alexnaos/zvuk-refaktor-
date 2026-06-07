@@ -127,6 +127,7 @@ void loopMQTT() {
         static unsigned long lastReconnect = 0;
         if (millis() - lastReconnect > 5000) {
             lastReconnect = millis();
+            logCrashMarker("MQTT: Попытка коннекта к брокеру");
             connectMQTT();
         }
     }

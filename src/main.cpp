@@ -2,12 +2,11 @@
 #include <WiFi.h>
 #include <Update.h>
 #include <GyverDBFile.h>
-#include "esp_task_wdt.h"
+#include "esp_task_wdt.h" // Подключаем встроенный WDT
 #include "config.h"
 #include "global_state.h"
 #include "web_server.h"
 #include "mqtt_module.h"
-
 #include "core/fs_module.h"
 #include "core/playlist_parser.h"
 #include "core/audio_playback.h"
@@ -20,12 +19,24 @@ const unsigned long wifiCheckInterval = 10000;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastHealthCheck = 0;
 
+// ПЕРЕМЕННЫЕ ДЛЯ БЕЗОПАСНОГО АСИНХРОННОГО РОУМИНГА
+unsigned long lastRoamingAttempt = 0;
+const unsigned long roamingDelay = 30000; // Не роумить чаще чем раз в 30 секунд
+
 void setup() {
     Serial.begin(115200);
     delay(2000);
     
+    // УВЕЛИЧИВАЕМ ТАЙМАУТ ДО 30 СЕКУНД
+    // 30 секунд — стандарт для устройств с OTA-обновлением по воздуху.
+    // Защита от зависаний остается, но теперь WDT не прервет загрузку файлов.
+    esp_task_wdt_init(30, true); 
+    esp_task_wdt_add(NULL); // Привязываем WDT к главному loop()
+
     RESET_REASON r0 = rtc_get_reset_reason(0);
     sysLog("warn:", "АППАРАТ", "Причина прошлого сброса CPU: " + getResetReason(r0));
+    
+    printPreviousCrashLog(); 
     sysLog("info:", "СТАРТ", "Запуск радио. Инициализация периферии...");
     
     initDisplay();
@@ -40,14 +51,15 @@ void setup() {
     
     unsigned long startAttempt = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-        delay(500);
+        esp_task_wdt_reset(); // Кормим сторожа при старте
+        delay(200);
     }
     
     if (WiFi.status() == WL_CONNECTED) {
         sysLog("info:", "СЕТЬ", "Успешное подключение. IP: " + WiFi.localIP().toString());
         configTime(3600 * 3, 0, "pool.ntp.org", "ru.pool.ntp.org");
     } else {
-        sysLog("err:", "СЕТЬ", "Ошибка Wi-Fi! Тайм-аут 10 секунд.");
+        sysLog("err:", "СЕТЬ", "Ошибка Wi-Fi! Старт в автономном режиме.");
     }
     
     initWebServer();
@@ -67,27 +79,28 @@ void setup() {
 }
 
 void loop() {
+    // Чистый, стандартный сброс без костылей
+    esp_task_wdt_reset(); 
+
     // Вызов обработчика веб-запросов Гайвера
     handleWebRequests();
     
+    // Проверка связи и асинхронный роуминг
     if (millis() - lastWiFiCheck > wifiCheckInterval) {
         lastWiFiCheck = millis();
+        
         if (WiFi.status() != WL_CONNECTED) {
-            sysLog("warn:", "СЕТЬ", "Связь потеряна! Переподключение...");
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-        } else {
-            // ДИНАМИЧЕСКИЙ РОУМИНГ (БЕЗ ХАРДКОДА MAC-АДРЕСА)
-            // Если плата зацепилась за дальний роутер и сигнал хуже -82 dBm
-            if (WiFi.RSSI() < -82) {
-                sysLog("warn:", "РОУМИНГ", "Слишком слабый сигнал: " + String(WiFi.RSSI()) + " dBm. Ищу точку с лучшим приемом...");
-                
-                // Мягко отключаемся от текущего слабого роутера
-                WiFi.disconnect();
-                
-                // Запускаем поиск заново. Сетевой стек ESP32 автоматически отсканирует
-                // эфир вашей сети Sloboda100 и выберет роутер с максимальным уровнем сигнала.
-                // При этом полное резервирование сети сохраняется!
+            sysLog("warn:", "СЕТЬ", "Связь потеряна! Мягкое переподключение...");
+            if (WiFi.status() == WL_DISCONNECTED || WiFi.status() == WL_IDLE_STATUS) {
                 WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            }
+        } else {
+            if (WiFi.RSSI() < -82) {
+                if (millis() - lastRoamingAttempt > roamingDelay) {
+                    lastRoamingAttempt = millis();
+                    sysLog("warn:", "РОУМИНГ", "Слабый сигнал: " + String(WiFi.RSSI()) + " dBm. Ищу лучшую точку...");
+                    WiFi.disconnect(); 
+                }
             }
         }
     }
@@ -100,16 +113,14 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED) {
         loopMQTT();
         
-        // БЕЗОПАСНАЯ ОТПРАВКА НАЗВАНИЯ ТРЕКА В MQTT
-        // Переменная mqttTrackUpdateFlag создана глобально в audio_playback.cpp.
-        extern bool mqttTrackUpdateFlag; 
+        extern bool mqttTrackUpdateFlag;
         if (mqttTrackUpdateFlag) {
-            mqttTrackUpdateFlag = false; // Мгновенно сбрасываем флаг
-            mqttPublishTrack(currentTrack.c_str()); // Спокойно отправляем пакет вне аудио-прерывания
+            mqttTrackUpdateFlag = false; 
+            mqttPublishTrack(currentTrack.c_str()); 
         }
     }
     
-    // Главная аудио-задача: вызывается непрерывно и без задержек!
+    // Главная аудио-задача
     loopAudioPlayback();
     loopAudioRecorder();
     
@@ -117,9 +128,6 @@ void loop() {
         changeStationFlag = false;
         if (currentStationIdx >= 0 && currentStationIdx < stationCount) {
             String url = stationList[currentStationIdx].url;
-            
-            // Запуск аудио-потока делается напрямую. Движок Wolle VS1053 сам 
-            // асинхронно обработает подключение и вернет ошибку, если сервер лежит.
             updateDisplay(stationList[currentStationIdx].name.c_str(), "Connecting...");
             startRadioStream(url.c_str());
             updateDisplay(stationList[currentStationIdx].name.c_str(), "PLAYING");

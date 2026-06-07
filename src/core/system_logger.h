@@ -10,4 +10,7 @@ extern sets::Logger webLogger;
 String getResetReason(RESET_REASON reason);
 void sysLog(const String& level, const String& module, const String& text);
 void logSystemHealth();
-bool checkUrlAvailability(const String& url);
+
+// НОВЫЕ ФУНКЦИИ ДЛЯ ЧУДО-ЛОГА ПОСЛЕ ПАДЕНИЯ
+void logCrashMarker(const char* stepInfo);
+void printPreviousCrashLog();
