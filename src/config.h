@@ -17,6 +17,29 @@ static const char* WIFI_PASSWORD = "2716192023";
 #define I2C_SDA 33
 #define I2C_SCL 35
 
+// Константы для звука
+#define VOLUME_MIN 0
+#define VOLUME_MAX 21
+#define BASS_MIN 0
+#define BASS_MAX 15
+#define TREBLE_MIN -8
+#define TREBLE_MAX 7
+#define VOLUME_DEFAULT 12
+#define BASS_DEFAULT 0
+#define TREBLE_DEFAULT 0
+
+// Константы Wi-Fi
+#define WIFI_TIMEOUT_MS 10000
+#define WIFI_CHECK_INTERVAL_MS 10000
+#define WIFI_ROAMING_DELAY_MS 30000
+#define WIFI_RSSI_THRESHOLD -82
+
+// Константы системы
+#define HEALTH_CHECK_INTERVAL_MS 60000
+#define DISPLAY_UPDATE_INTERVAL_MS 1000
+#define HARDWARE_CHECK_INTERVAL_MS 30000
+#define WDT_TIMEOUT_SEC 30
+
 // Структура для динамического списка станций
 struct Station {
  String name;

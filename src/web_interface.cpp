@@ -28,7 +28,7 @@ void buildInterface(sets::Builder &b) {
         b.Label(kk::txt_st, "Станция", currentStationName);
         b.Label(kk::txt_tr, "Трек", currentTrack);
         
-        if (b.Slider(kk::vol, "Громкость", 0, 21, 1)) {
+        if (b.Slider(kk::vol, "Громкость", VOLUME_MIN, VOLUME_MAX, 1)) {
             extern GyverDBFile db;
             updateVolume(db[kk::vol].toInt());
         }
@@ -70,8 +70,8 @@ void buildInterface(sets::Builder &b) {
     {
         sets::Group g(b, "Настройки тембра");
         bool toneChanged = false;
-        if (b.Slider(kk::bass, "Усиление НЧ (Бас)", 0, 15, 1)) toneChanged = true;
-        if (b.Slider(kk::treble, "Усиление ВЧ (Требл)", -8, 7, 1)) toneChanged = true;
+        if (b.Slider(kk::bass, "Усиление НЧ (Бас)", BASS_MIN, BASS_MAX, 1)) toneChanged = true;
+        if (b.Slider(kk::treble, "Усиление ВЧ (Требл)", TREBLE_MIN, TREBLE_MAX, 1)) toneChanged = true;
         if (toneChanged) {
             extern GyverDBFile db;
             updateTone(db[kk::bass].toInt(), db[kk::treble].toInt());

@@ -1,7 +1,8 @@
 #include "web_server.h"
 #include "web_interface.h"
-#include "core/system_logger.h" // Исправленный путь к папке core/
- #include "esp_task_wdt.h"
+#include "config.h"
+#include "core/system_logger.h"
+#include "esp_task_wdt.h"
 #include <LittleFS.h>
 
 // Физическое выделение памяти под БД и сервер (стр. 13-14 документации)
@@ -14,9 +15,9 @@ void initWebServer() {
         
         // РЕГИСТРАЦИЯ И ИНИЦИАЛИЗАЦИЯ ДЕФОЛТНЫХ КЛЮЧЕЙ БД СТРОГО ПО СУЩЕСТВУЮЩЕМУ МАКРОСУ
         // Метод .init() создает ячейку только если её еще нет, не перезаписывая старые данные
-        db.init(SH("vol"), 12);
-        db.init(SH("bass"), 0);
-        db.init(SH("treble"), 0);
+        db.init(SH("vol"), VOLUME_DEFAULT);
+        db.init(SH("bass"), BASS_DEFAULT);
+        db.init(SH("treble"), TREBLE_DEFAULT);
         db.init(SH("st_id"), 0);
         db.init(SH("c_url"), "");
         db.update(); // Принудительно сбрасываем структуру на Flash

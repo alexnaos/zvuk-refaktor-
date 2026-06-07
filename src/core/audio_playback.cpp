@@ -2,7 +2,7 @@
 #include "../config.h"
 #include "../global_state.h"
 #include "../mqtt_module.h" 
-#include "core/system_logger.h" // Добавлено для вывода отладки в веб-интерфейс
+#include "system_logger.h" // Добавлено для вывода отладки в веб-интерфейс
 #include <SPI.h>
 
 VS1053* player = nullptr;
@@ -12,7 +12,8 @@ VS1053* player = nullptr;
 // ============================================================================
 
 // Глобальный флаг для асинхронной отправки MQTT (чтобы не блокировать плеер)
-bool mqttTrackUpdateFlag = false;
+// Определен в global_state.cpp
+extern bool mqttTrackUpdateFlag;
 
 void vs1053_showstreamtitle(const char *info) {
     if (info != nullptr) {
@@ -98,7 +99,7 @@ void startRadioStream(const char* url) {
 
 void updateVolume(int vol) {
     if (player != nullptr) {
-        currentVolume = constrain(vol, 0, 21);
+        currentVolume = constrain(vol, VOLUME_MIN, VOLUME_MAX);
         player->setVolume(currentVolume);
         
         Serial.printf("[Звук]: Новая громкость: %d\n", currentVolume);
@@ -108,8 +109,8 @@ void updateVolume(int vol) {
 
 void updateTone(int bass, int treble) {
     if (player != nullptr) {
-        currentBass = constrain(bass, 0, 15);
-        currentTreble = constrain(treble, -8, 7);
+        currentBass = constrain(bass, BASS_MIN, BASS_MAX);
+        currentTreble = constrain(treble, TREBLE_MIN, TREBLE_MAX);
         
         uint8_t toneData[] = { (uint8_t)currentTreble, 6, (uint8_t)currentBass, 5 };
         player->setTone(toneData);
@@ -126,7 +127,7 @@ void loopAudioPlayback() {
         // ДОБАВЛЕНО: Автоматическая проверка "зависания" шины SPI декодера
         // Раз в 30 секунд читаем статус громкости. Если на проводах наводка — чип вернет > 254.
         static unsigned long lastHardwareCheck = 0;
-        if (millis() - lastHardwareCheck > 30000) {
+        if (millis() - lastHardwareCheck > HARDWARE_CHECK_INTERVAL_MS) {
             lastHardwareCheck = millis();
             
             if (player->getVolume() > 254) {

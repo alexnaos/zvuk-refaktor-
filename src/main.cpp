@@ -15,13 +15,13 @@
 #include "core/system_logger.h"
 
 unsigned long lastWiFiCheck = 0;
-const unsigned long wifiCheckInterval = 10000;
+const unsigned long wifiCheckInterval = WIFI_CHECK_INTERVAL_MS;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastHealthCheck = 0;
 
 // ПЕРЕМЕННЫЕ ДЛЯ БЕЗОПАСНОГО АСИНХРОННОГО РОУМИНГА
 unsigned long lastRoamingAttempt = 0;
-const unsigned long roamingDelay = 30000; // Не роумить чаще чем раз в 30 секунд
+const unsigned long roamingDelay = WIFI_ROAMING_DELAY_MS; // Не роумить чаще чем раз в 30 секунд
 
 void setup() {
     Serial.begin(115200);
@@ -30,7 +30,7 @@ void setup() {
     // УВЕЛИЧИВАЕМ ТАЙМАУТ ДО 30 СЕКУНД
     // 30 секунд — стандарт для устройств с OTA-обновлением по воздуху.
     // Защита от зависаний остается, но теперь WDT не прервет загрузку файлов.
-    esp_task_wdt_init(30, true); 
+    esp_task_wdt_init(WDT_TIMEOUT_SEC, true); 
     esp_task_wdt_add(NULL); // Привязываем WDT к главному loop()
 
     RESET_REASON r0 = rtc_get_reset_reason(0);
@@ -50,7 +50,7 @@ void setup() {
     sysLog("info:", "СЕТЬ", "Подключение к Wi-Fi: " + String(WIFI_SSID));
     
     unsigned long startAttempt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_TIMEOUT_MS) {
         esp_task_wdt_reset(); // Кормим сторожа при старте
         delay(200);
     }
@@ -95,17 +95,19 @@ void loop() {
                 WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             }
         } else {
-            if (WiFi.RSSI() < -82) {
+            if (WiFi.RSSI() < WIFI_RSSI_THRESHOLD) {
                 if (millis() - lastRoamingAttempt > roamingDelay) {
                     lastRoamingAttempt = millis();
                     sysLog("warn:", "РОУМИНГ", "Слабый сигнал: " + String(WiFi.RSSI()) + " dBm. Ищу лучшую точку...");
-                    WiFi.disconnect(); 
+                    WiFi.disconnect();
+                    delay(500);
+                    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
                 }
             }
         }
     }
     
-    if (millis() - lastHealthCheck > 60000) {
+    if (millis() - lastHealthCheck > HEALTH_CHECK_INTERVAL_MS) {
         lastHealthCheck = millis();
         if (WiFi.status() == WL_CONNECTED) logSystemHealth();
     }
@@ -135,7 +137,7 @@ void loop() {
         }
     }
     
-    if (millis() - lastDisplayUpdate > 1000) {
+    if (millis() - lastDisplayUpdate > DISPLAY_UPDATE_INTERVAL_MS) {
         lastDisplayUpdate = millis();
         updateDisplay(currentStationName.c_str(), currentTrack.c_str());
     }

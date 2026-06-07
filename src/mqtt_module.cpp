@@ -27,7 +27,7 @@ void mqttPublishPlaylist() {
 void mqttPublishStatus() {
     if (!mqttClient.connected()) return;
     
-    int haVolume = (int)((currentVolume * 254) / 21);
+    int haVolume = (int)((currentVolume * 254) / VOLUME_MAX);
     haVolume = constrain(haVolume, 0, 254);
     mqttClient.publish(topic_volume, String(haVolume).c_str(), true);
 
@@ -69,7 +69,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 
     if (body.startsWith("vol ")) {
         int haVol = body.substring(4).toInt();
-        updateVolume((haVol * 21) / 254);
+        updateVolume((haVol * VOLUME_MAX) / 254);
     } else if (body.startsWith("play ")) {
         int targetIdx = body.substring(5).toInt() - 1;
         if (targetIdx >= 0 && targetIdx < stationCount) {
