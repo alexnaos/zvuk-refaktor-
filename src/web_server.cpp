@@ -27,6 +27,15 @@ void initWebServer() {
         sysLog("err:", "СЕРВЕР", "КРИТИКА: LittleFS недоступен, БД не запущена!");
     }
 
+    // Регистрация кастомного CSS через custom.js (инжектит стили в <head>)
+    if (LittleFS.exists("/custom.js")) {
+        sett.setCustomFile("/custom.js");
+        sysLog("info:", "СЕРВЕР", "Кастомный CSS/JS файл загружен с LittleFS.");
+    }
+
+    // Настройка темы (Default =跟随 custom.js overrides)
+    sett.config.theme = sets::Colors::Default;
+
     sett.begin();
     sett.onBuild(buildInterface);   
     sett.onUpdate(updateInterface); 

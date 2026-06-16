@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <Update.h>
 #include <GyverDBFile.h>
+#include <ESPmDNS.h>
 #include "esp_task_wdt.h" // Подключаем встроенный WDT
 #include "config.h"
 #include "global_state.h"
@@ -56,8 +57,17 @@ void setup() {
     }
     
     if (WiFi.status() == WL_CONNECTED) {
+        WiFi.setHostname(MDNS_NAME);
         sysLog("info:", "СЕТЬ", "Успешное подключение. IP: " + WiFi.localIP().toString());
         configTime(3600 * 3, 0, "pool.ntp.org", "ru.pool.ntp.org");
+
+        // mDNS
+        if (MDNS.begin(MDNS_NAME)) {
+            sysLog("info:", "MDNS", String(MDNS_NAME) + ".local");
+            MDNS.addService("http", "tcp", 80);
+        } else {
+            sysLog("err:", "MDNS", "Ошибка запуска");
+        }
     } else {
         sysLog("err:", "СЕТЬ", "Ошибка Wi-Fi! Старт в автономном режиме.");
     }

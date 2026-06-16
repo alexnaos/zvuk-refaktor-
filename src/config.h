@@ -29,6 +29,7 @@ static const char* WIFI_PASSWORD = "2716192023";
 #define TREBLE_DEFAULT 0
 
 // Константы Wi-Fi
+#define MDNS_NAME "zvuk"
 #define WIFI_TIMEOUT_MS 10000
 #define WIFI_CHECK_INTERVAL_MS 10000
 #define WIFI_ROAMING_DELAY_MS 30000
