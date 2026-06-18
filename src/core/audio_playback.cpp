@@ -2,10 +2,61 @@
 #include "../config.h"
 #include "../global_state.h"
 #include "../mqtt_module.h" 
-#include "system_logger.h" // Добавлено для вывода отладки в веб-интерфейс
+#include "system_logger.h"
 #include <SPI.h>
 
 VS1053* player = nullptr;
+
+// ============================================================================
+// ДИАГНОСТИЧЕСКИЙ ЛОГ VS1053
+// ============================================================================
+
+// Функция читает и выводит основные регистры VS1053 для диагностики
+static void logVS1053Registers() {
+    if (player == nullptr) {
+        sysLog("err:", "VS1053", "player == nullptr, невозможно прочитать регистры");
+        return;
+    }
+    
+    // Проверка DREQ пина (если он всегда LOW - чип завис или не проинициализирован)
+    int dreqLevel = digitalRead(VS1053_DREQ);
+    
+    uint16_t vol    = player->getVolume();
+    int      bitrate = player->getBitRate();
+    size_t bufFilled = player->bufferFilled();
+    size_t bufFree   = player->bufferFree();
+    uint32_t heapFree = ESP.getFreeHeap();
+    uint32_t psramFree = ESP.getFreePsram();
+    bool running = player->isRunning();
+    int codec = player->getCodec();
+    
+    sysLog("diag:", "VS1053",
+        String("DREQ=") + (dreqLevel ? "HIGH" : "LOW") +
+        " | run=" + (running ? "YES" : "NO") +
+        " | vol=" + vol +
+        " | bitrate=" + bitrate + "kbps" +
+        " | codec=" + player->getCodecname() +
+        " | bufFill=" + bufFilled +
+        " | bufFree=" + bufFree +
+        " | heap=" + heapFree +
+        " | psram=" + psramFree);
+    
+    // DREQ=LOW при работающем плеере — это НОРМАЛЬНО!
+    // DREQ переключается HIGH/LOW постоянно: HIGH когда чип готов принять данные,
+    // LOW когда чип занят декодированием. Если DREQ остаётся LOW >5 секунд — вот тогда проблема.
+    // Предупреждение было ложным — DREQ циклически меняет состояние в процессе работы.
+    // (убрано ложное срабатывание)
+    
+    // Проверка на зависание по громкости (если > 254 - SPI сбой)
+    if (vol > 254) {
+        sysLog("err:", "VS1053", "Аппаратный сбой SPI! getVolume()=" + String(vol) + " (норма < 254)");
+    }
+    
+    // Если буфер пуст — поток не идёт
+    if (bufFilled == 0 && running) {
+        sysLog("warn:", "VS1053", "Буфер пуст, но плеер запущен! Нет аудиоданных из сети.");
+    }
+}
 
 // ============================================================================
 // СИСТЕМНЫЕ ПЕРЕХВАТЧИКИ БИБЛИОТЕКИ WOLLE VS1053 (ГЛУБОКАЯ ОТЛАДКА)
@@ -20,12 +71,8 @@ void vs1053_showstreamtitle(const char *info) {
         currentTrack = String(info);
         currentTrack.trim();
         
-        // ИСПРАВЛЕНО: Полностью убрана блокирующая функция mqttPublishTrack().
-        // Теперь мы просто поднимаем флаг. Отправка произойдет в loop(),
-        // когда процессор будет свободен от подкачки аудиоданных.
         mqttTrackUpdateFlag = true;
         
-        // Логируем в ОЗУ для веб-интерфейса (работает мгновенно)
         sysLog("info:", "ДЕКОДЕР", "Трек: " + currentTrack);
     }
 }
@@ -38,14 +85,12 @@ void vs1053_showstreaminfo(const char *info) {
     }
 }
 
-// ДОБАВЛЕНО: Срабатывает при критическом опустошении сетевого буфера (заикании)
 void vs1053_commercial(const char *info) {
     if (info != nullptr) {
         sysLog("warn:", "СЕТЬ_БУФЕР", "Поток прерван! Ожидание данных. Код: " + String(info));
     }
 }
 
-// ДОБАВЛЕНО: Срабатывает, если TCP-сессия была разорвана со стороны сервера радио
 void vs1053_eof_mp3(const char *info) {
     if (info != nullptr) {
         sysLog("err:", "ОБРЫВ_СВЯЗИ", "Удаленный сервер закрыл поток: " + String(info));
@@ -55,7 +100,6 @@ void vs1053_eof_mp3(const char *info) {
     }
 }
 
-// ДОБАВЛЕНО: Отслеживание текущего битрейта (помогает выявить перегрузку Wi-Fi)
 void vs1053_bitrate(const char *info) {
     if (info != nullptr) {
         sysLog("info:", "БИТРЕЙТ", "Скорость потока: " + String(info) + " kbps");
@@ -67,22 +111,73 @@ void vs1053_bitrate(const char *info) {
 // ============================================================================
 
 void initAudio() {
+    sysLog("info:", "VS1053", "Старт инициализации VS1053...");
+    
+    // Замер времени инициализации
+    unsigned long tStart = millis();
+    
     pinMode(VS1053_RST, OUTPUT);
     digitalWrite(VS1053_RST, LOW);
     delay(50);
+    
+    // Проверка DREQ до снятия сброса — должен быть LOW (чип в сбросе)
+    int dreqBefore = digitalRead(VS1053_DREQ);
     digitalWrite(VS1053_RST, HIGH);
     delay(50);
+    
+    // DREQ после сброса: должен подняться в HIGH в течение 100-500мс
+    int dreqAfter = digitalRead(VS1053_DREQ);
+    
+    sysLog("diag:", "VS1053", String("RST: DREQ до=") + (dreqBefore ? "HIGH" : "LOW") + 
+        " после=" + (dreqAfter ? "HIGH" : "LOW"));
 
-    // Сохранено строго в исходном виде
     player = new VS1053(VS1053_CS, VS1053_DCS, VS1053_DREQ, HSPI, PIN_SPI_MOSI, PIN_SPI_MISO, PIN_SPI_SCK);
     player->begin();
+    
+    unsigned long tInit = millis() - tStart;
+    
+    // Диагностика после begin()
+    int chipVersion = player->printVersion();
+    uint16_t volAfter = player->getVolume();
+    bool isRunning = player->isRunning();
+    size_t bufFilled = player->bufferFilled();
+    uint32_t heapFree = ESP.getFreeHeap();
+    uint32_t psramFree = ESP.getFreePsram();
+    
+    sysLog("diag:", "VS1053", String("initTime=") + tInit + "ms" +
+        " | chipVer=" + chipVersion +
+        " | vol=" + volAfter +
+        " | running=" + (isRunning ? "YES" : "NO") +
+        " | codec=" + player->getCodecname() +
+        " | bufFill=" + bufFilled +
+        " | heap=" + heapFree +
+        " | psram=" + psramFree);
+    
+    // Если версия чипа 0 — SPI не работает
+    if (chipVersion == 0) {
+        sysLog("err:", "VS1053", "printVersion() вернул 0! SPI не работает!");
+        sysLog("err:", "VS1053", "  Проверьте питание модуля (3.3В) и пины SPI");
+    } else {
+        sysLog("info:", "VS1053", String("Версия чипа: ") + chipVersion + " (VS1053 ожидается >0)");
+    }
+    
+    // Если volume > 254 — SPI сбой при первом чтении
+    if (volAfter > 254) {
+        sysLog("err:", "VS1053", "Сбой SPI при первой установке громкости! vol=" + String(volAfter));
+    }
+    
+    // Если DREQ не поднялся — проблема
+    if (dreqAfter == 0) {
+        sysLog("err:", "VS1053", "DREQ остаётся LOW после begin()! Чип не стартовал.");
+    }
+    
     player->setVolume(currentVolume);
 
     uint8_t toneData[] = { (uint8_t)currentTreble, 6, (uint8_t)currentBass, 5 };
     player->setTone(toneData);
     
-    Serial.println("[Звук]: Модуль VS1053 успешно запущен.");
-    sysLog("info:", "ЖЕЛЕЗО", "Модуль VS1053 успешно запущен.");
+    unsigned long tEnd = millis() - tStart;
+    sysLog("info:", "VS1053", String("Инициализация завершена за ") + tEnd + "мс");
 }
 
 void startRadioStream(const char* url) {
@@ -94,6 +189,9 @@ void startRadioStream(const char* url) {
         
         player->connecttohost(url);
         player->setVolume(currentVolume);
+        
+        // Сразу после запуска потока — диагностика
+        logVS1053Registers();
     }
 }
 
@@ -103,7 +201,8 @@ void updateVolume(int vol) {
         player->setVolume(currentVolume);
         
         Serial.printf("[Звук]: Новая громкость: %d\n", currentVolume);
-        sysLog("info:", "ЗВУК", "Новая громкость: " + String(currentVolume));
+        sysLog("info:", "ЗВУК", "Новая громкость: " + String(currentVolume) + 
+            " (getVolume=" + player->getVolume() + ")");
     }
 }
 
@@ -120,11 +219,21 @@ void updateTone(int bass, int treble) {
     }
 }
 
+// Таймеры для диагностики в loop
+static unsigned long lastDiagLog = 0;
+static const unsigned long DIAG_LOG_INTERVAL_MS = 5000; // Лог каждые 5 секунд
+
 void loopAudioPlayback() {
     if (player != nullptr && !isRecording) {
         player->loop();
         
-        // ДОБАВЛЕНО: Автоматическая проверка "зависания" шины SPI декодера
+        // Диагностика VS1053 каждые 5 секунд
+        if (millis() - lastDiagLog > DIAG_LOG_INTERVAL_MS) {
+            lastDiagLog = millis();
+            logVS1053Registers();
+        }
+        
+        // Автоматическая проверка "зависания" шины SPI декодера
         // Раз в 30 секунд читаем статус громкости. Если на проводах наводка — чип вернет > 254.
         static unsigned long lastHardwareCheck = 0;
         if (millis() - lastHardwareCheck > HARDWARE_CHECK_INTERVAL_MS) {
