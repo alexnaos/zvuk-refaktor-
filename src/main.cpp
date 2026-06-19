@@ -14,6 +14,8 @@
 #include "core/audio_recorder.h"
 #include "core/display_module.h"
 #include "core/system_logger.h"
+#include "core/encoder_module.h"
+#include "core/menu_state.h"
 
 unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = WIFI_CHECK_INTERVAL_MS;
@@ -23,6 +25,9 @@ unsigned long lastHealthCheck = 0;
 // ПЕРЕМЕННЫЕ ДЛЯ БЕЗОПАСНОГО АСИНХРОННОГО РОУМИНГА
 unsigned long lastRoamingAttempt = 0;
 const unsigned long roamingDelay = WIFI_ROAMING_DELAY_MS; // Не роумить чаще чем раз в 30 секунд
+
+// Флаг: показывать дисплей с меню (энкодер) или стандартный (трек)
+static volatile bool menuModeActive = false;
 
 void setup() {
     Serial.begin(115200);
@@ -76,6 +81,11 @@ void setup() {
     initMQTT();
     logSystemHealth();
     
+    // Инициализация энкодера и меню
+    initEncoder();
+    initMenu(currentStationIdx, currentVolume, currentBass, currentTreble);
+    sysLog("info:", "ЭНКОДЕР", "Энкодер инициализирован (GPIO 1,2,3)");
+
     if (db.has(SH("st_id"))) {
         int savedStationIdx = db[SH("st_id")].toInt();
         if (savedStationIdx >= 0 && savedStationIdx < stationCount) {
@@ -89,6 +99,52 @@ void setup() {
 }
 
 void loop() {
+    // Обработка энкодера
+    loopEncoder();
+    EncoderDirection encDir = readEncoder();
+    ButtonState btnState = readButton();
+    
+    if (encDir != ENC_NONE || btnState != BTN_NONE) {
+        MenuAction action = processEncoderAction(encDir, btnState);
+        
+        // Применяем действия
+        if (action.needsVolumeChange) {
+            updateVolume(action.param);
+        }
+        if (action.needsToneChange) {
+            // Для BASSA и TREBLE — вызываем updateTone с обоими параметрами
+            // В menu_action param содержит изменённое значение,
+            // второе значение остаётся прежним
+            if (getCurrentMode() == MENU_BASS) {
+                updateTone(action.param, currentTreble);
+            } else if (getCurrentMode() == MENU_TREBLE) {
+                updateTone(currentBass, action.param);
+            }
+        }
+        if (action.needsStationChange) {
+            changeStation(action.param);
+        }
+        if (action.needsDisplay) {
+            menuModeActive = true; // Переключаем дисплей в режим меню
+            // Обновляем дисплей с меню
+            int val, mn, mx;
+            const char* lbl;
+            const char* ext;
+            getMenuDisplayData(val, mn, mx, lbl, ext);
+            updateMenuDisplay(getCurrentMode(), val, mn, mx, lbl, ext);
+        }
+    }
+    
+    // Автоматический выход из меню через 10 секунд бездействия
+    static unsigned long lastMenuActivity = 0;
+    if (menuModeActive) {
+        if (encDir != ENC_NONE || btnState != BTN_NONE) {
+            lastMenuActivity = millis();
+        }
+        if (millis() - lastMenuActivity > 10000) {
+            menuModeActive = false;
+        }
+    }
     // Чистый, стандартный сброс без костылей
     esp_task_wdt_reset(); 
 
@@ -147,8 +203,11 @@ void loop() {
         }
     }
     
+    // Обновление дисплея: если активно меню — не перезаписываем меню стандартным экраном
     if (millis() - lastDisplayUpdate > DISPLAY_UPDATE_INTERVAL_MS) {
         lastDisplayUpdate = millis();
-        updateDisplay(currentStationName.c_str(), currentTrack.c_str());
+        if (!menuModeActive) {
+            updateDisplay(currentStationName.c_str(), currentTrack.c_str());
+        }
     }
 }

@@ -8,6 +8,7 @@ void initAudio();
 void startRadioStream(const char* url);
 void updateVolume(int vol);
 void updateTone(int bass, int treble);
+void changeStation(int stationIndex);
 void loopAudioPlayback();
 
 // Чистые объявления функций без extern "C", строго соответствующие библиотеке

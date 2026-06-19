@@ -195,6 +195,21 @@ void startRadioStream(const char* url) {
     }
 }
 
+void changeStation(int stationIndex) {
+    extern Station stationList[MAX_STATIONS];
+    extern int stationCount;
+    extern int currentStationIdx;
+    extern String currentStationName;
+    extern bool changeStationFlag;
+    
+    if (stationIndex >= 0 && stationIndex < stationCount) {
+        currentStationIdx = stationIndex;
+        currentStationName = stationList[stationIndex].name;
+        changeStationFlag = true; // main.cpp обработает в loop()
+        sysLog("info:", "ЭНКОДЕР", "Выбрана станция: " + currentStationName);
+    }
+}
+
 void updateVolume(int vol) {
     if (player != nullptr) {
         currentVolume = constrain(vol, VOLUME_MIN, VOLUME_MAX);

@@ -17,6 +17,11 @@ static const char* WIFI_PASSWORD = "2716192023";
 #define I2C_SDA 33
 #define I2C_SCL 35
 
+// Пины энкодера
+#define ENC_CLK 1
+#define ENC_DT  2
+#define ENC_SW  3
+
 // Константы для звука
 #define VOLUME_MIN 0
 #define VOLUME_MAX 21
