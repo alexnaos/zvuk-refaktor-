@@ -29,6 +29,79 @@ const unsigned long roamingDelay = WIFI_ROAMING_DELAY_MS; // Не роумить
 // Флаг: показывать дисплей с меню (энкодер) или стандартный (трек)
 static volatile bool menuModeActive = false;
 
+// === WATCHDOG АВТОВОССТАНОВЛЕНИЯ ПОСЛЕ КРАХА ===
+// RTC-память сохраняется при перезагрузках WDT/сбоях
+RTC_DATA_ATTR static unsigned long crashCount = 0;      // Счетчик последовательных падений
+RTC_DATA_ATTR static unsigned long lastCrashTime = 0;    // Время последнего падения (uptime)
+
+// Максимальное количество быстрых перезагрузок перед полным сбросом конфигурации
+#define MAX_CRASH_BEFORE_RESET 3
+
+// Порог "быстрого падения" — если краш произошел раньше чем через 120 секунд после старта
+#define CRASH_WINDOW_SEC 120
+
+// Защита от бесконечного цикла перезагрузок: если крашей > MAX до истечения окна — сбрасываем
+void checkAndHandleCrashLoop() {
+    unsigned long uptimeSec = millis() / 1000;
+    
+    // Если с последнего краша прошло больше CRASH_WINDOW_SEC — сбрасываем счетчик
+    if (lastCrashTime > 0 && uptimeSec - lastCrashTime > CRASH_WINDOW_SEC) {
+        crashCount = 0;
+    }
+    
+    crashCount++;
+    lastCrashTime = uptimeSec;
+    
+    if (crashCount > MAX_CRASH_BEFORE_RESET) {
+        // Критический цикл перезагрузок — сбрасываем конфигурацию
+        sysLog("err:", "WATCHDOG", "Обнаружен цикл крашей! Сброс конфигурации...");
+        if (LittleFS.exists("/db.bin")) {
+            LittleFS.remove("/db.bin");
+            sysLog("info:", "WATCHDOG", "Файл БД удален. Настройки будут сброшены.");
+        }
+        crashCount = 0;
+    }
+    
+    sysLog("warn:", "WATCHDOG", "Краш #" + String(crashCount) + 
+           " (uptime=" + String(uptimeSec) + "с, окно=" + String(CRASH_WINDOW_SEC) + "с)");
+}
+
+// Периодический мониторинг здоровья системы
+static unsigned long lastHealthMonitor = 0;
+#define HEALTH_MONITOR_INTERVAL_MS 30000  // Каждые 30 секунд
+
+void systemHealthMonitor() {
+    unsigned long now = millis();
+    if (now - lastHealthMonitor < HEALTH_MONITOR_INTERVAL_MS) return;
+    lastHealthMonitor = now;
+    
+    uint32_t freeHeap = ESP.getFreeHeap();
+    
+    // Если ОЗУ < 20 КБ — критично, пытаемся освободить память
+    if (freeHeap < 20000) {
+        sysLog("warn:", "WATCHDOG", "Критически мало ОЗУ: " + String(freeHeap) + " Б. Очистка...");
+        // Принудительно очищаем буфер логгера для освобождения памяти
+        webLogger.clear();
+        
+        // Если всё еще мало — инициируем перезагрузку
+        if (ESP.getFreeHeap() < 15000) {
+            sysLog("err:", "WATCHDOG", "ОЗУ исчерпано (" + String(ESP.getFreeHeap()) + " Б). Аварийная перезагрузка...");
+            delay(100);
+            ESP.restart();
+        }
+    }
+    
+    // Мониторинг VS1053
+    if (player != nullptr) {
+        uint16_t vol = player->getVolume();
+        if (vol > 254) {
+            sysLog("err:", "WATCHDOG", "SPI сбой VS1053 (vol=" + String(vol) + "). Реинициализация...");
+            player->stop_mp3client();
+            player->begin();
+        }
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(2000);
@@ -79,6 +152,10 @@ void setup() {
     
     initWebServer();
     initMQTT();
+    
+    // Проверка на цикл крашей и автосброс конфигурации при необходимости
+    checkAndHandleCrashLoop();
+    
     logSystemHealth();
     
     // Инициализация энкодера и меню
@@ -145,8 +222,6 @@ void loop() {
             menuModeActive = false;
         }
     }
-    // Чистый, стандартный сброс без костылей
-    esp_task_wdt_reset(); 
 
     // Вызов обработчика веб-запросов Гайвера
     handleWebRequests();
@@ -187,6 +262,9 @@ void loop() {
             mqttPublishTrack(currentTrack.c_str()); 
         }
     }
+    
+    // Мониторинг здоровья системы (ОЗУ, SPI, автовосстановление)
+    systemHealthMonitor();
     
     // Главная аудио-задача
     loopAudioPlayback();

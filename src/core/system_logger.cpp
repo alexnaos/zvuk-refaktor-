@@ -2,7 +2,8 @@
 #include <WiFi.h>
 
 // Физическое выделение буфера логгера в ОЗУ для веб-интерфейса
-sets::Logger webLogger(256);
+// УВЕЛИЧЕНО с 256 до 1024 строк для предотвращения переполнения и падения веб-интерфейса
+sets::Logger webLogger(1024);
 
 // ВЫДЕЛЯЕМ ЭНЕРГОНЕЗАВИСИМУЮ RTC ПАМЯТЬ СТРОГО ПОД КРИТИЧЕСКИЙ ЛОГ
 RTC_DATA_ATTR char rtcCrashBuffer[128] = "Нет данных о прошлом падении";
@@ -35,7 +36,18 @@ void printPreviousCrashLog() {
 }
 
 void sysLog(const String& level, const String& module, const String& text) {
-    String formattedLine = level + "[" + module + "] " + text;
+    // Оптимизация: используем snprintf для уменьшения фрагментации кучи
+    char formattedLine[256];
+    int len = snprintf(formattedLine, sizeof(formattedLine), "%s[%s] %s", level.c_str(), module.c_str(), text.c_str());
+    
+    // Безопасно обрезаем, если строка слишком длинная
+    if (len >= (int)sizeof(formattedLine)) {
+        formattedLine[sizeof(formattedLine) - 4] = '.';
+        formattedLine[sizeof(formattedLine) - 3] = '.';
+        formattedLine[sizeof(formattedLine) - 2] = '.';
+        formattedLine[sizeof(formattedLine) - 1] = '\0';
+    }
+    
     Serial.println(formattedLine);
     webLogger.println(formattedLine);
     
@@ -48,17 +60,19 @@ void sysLog(const String& level, const String& module, const String& text) {
 void logSystemHealth() {
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t maxBlock = ESP.getMaxAllocHeap();
-    String currentBssid = WiFi.BSSIDstr();
     
-    // Делаем телеметрию максимально информативной (добавляем статус Wi-Fi)
-    String wifiStatusStr = "UNKNOWN";
-    if (WiFi.status() == WL_CONNECTED) wifiStatusStr = "CONNECTED";
-    else if (WiFi.status() == WL_CONNECTION_LOST) wifiStatusStr = "LOST";
-    else if (WiFi.status() == WL_DISCONNECTED) wifiStatusStr = "DISCONNECTED";
-
-    String msg = "ОЗУ: " + String(freeHeap) + " Б (Блок: " + String(maxBlock) + " Б) | ";
-    msg += "Статус Сети: " + wifiStatusStr + " (" + String(WiFi.RSSI()) + " dBm) | ";
-    msg += "Роутер (BSSID): " + currentBssid;
+    // Определяем статус Wi-Fi
+    const char* wifiStatusStr = "UNKNOWN";
+    wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED) wifiStatusStr = "CONNECTED";
+    else if (status == WL_CONNECTION_LOST) wifiStatusStr = "LOST";
+    else if (status == WL_DISCONNECTED) wifiStatusStr = "DISCONNECTED";
+    
+    // Оптимизировано: одна строка форматирования вместо конкатенации String
+    char msg[256];
+    snprintf(msg, sizeof(msg), 
+        "ОЗУ: %u Б (Блок: %u Б) | Статус Сети: %s (%d dBm) | BSSID: %s",
+        freeHeap, maxBlock, wifiStatusStr, WiFi.RSSI(), WiFi.BSSIDstr().c_str());
     
     if (freeHeap < 40000) {
         sysLog("warn:", "ДИАГНОСТИКА", msg);

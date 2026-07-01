@@ -236,7 +236,9 @@ void updateTone(int bass, int treble) {
 
 // Таймеры для диагностики в loop
 static unsigned long lastDiagLog = 0;
-static const unsigned long DIAG_LOG_INTERVAL_MS = 5000; // Лог каждые 5 секунд
+// ИСПРАВЛЕНО: Увеличено с 5 до 30 секунд для уменьшения нагрузки на логгер и предотвращения
+// переполнения буфера webLogger. Диагностика раз в 5 секунд была избыточной.
+static const unsigned long DIAG_LOG_INTERVAL_MS = 30000; // Лог каждые 30 секунд
 
 void loopAudioPlayback() {
     if (player != nullptr && !isRecording) {

@@ -13,10 +13,12 @@ DB_KEYS(kk, vol, bass, treble, st_id, c_url, txt_st, txt_tr, sys_log);
 
 String getStationsOptions() {
     if (stationCount == 0) return "Нет станций";
-    String list = "";
+    // Оптимизация: используем Reserve для уменьшения переаллокаций
+    String list;
+    list.reserve(stationCount * 32); // Примерно 32 символа на станцию
     for (int i = 0; i < stationCount; i++) {
+        if (i > 0) list += ';';
         list += stationList[i].name;
-        if (i < stationCount - 1) list += ";"; // Разделитель ';' по доке (стр. 8)
     }
     return list;
 }
@@ -81,11 +83,16 @@ void buildInterface(sets::Builder &b) {
     // ---- ГРУППА: ВЫБОР ИСТОЧНИКА ----
     {
         sets::Group g(b, "Выбор источника");
-        if (b.Select(kk::st_id, "Выбрать станцию", getStationsOptions())) {
-            extern GyverDBFile db;
-            currentStationIdx = db[kk::st_id].toInt();
-            customUrl = "";
-            changeStationFlag = true;
+        // ИСПРАВЛЕНО: Показываем Select только если есть станции, иначе Label с предупреждением
+        if (stationCount > 0) {
+            if (b.Select(kk::st_id, "Выбрать станцию", getStationsOptions())) {
+                extern GyverDBFile db;
+                currentStationIdx = db[kk::st_id].toInt();
+                customUrl = "";
+                changeStationFlag = true;
+            }
+        } else {
+            b.Label(kk::st_id, "Станции", "Плейлист не загружен");
         }
         if (b.Input(kk::c_url, "Кастомный URL")) {
             extern GyverDBFile db;
@@ -114,10 +121,12 @@ void buildInterface(sets::Builder &b) {
         b.Log(kk::sys_log, webLogger, "Журнал событий");
         
         if (b.Button("Очистить историю логов")) {
-            // Очищаем буфер в оперативной памяти
-            // Примечание: так как файла на FS больше нет, метод просто сбрасывает ОЗУ-текст
+            // ИСПРАВЛЕНО: Убран опасный b.reload() внутри buildInterface.
+            // Вместо этого просто очищаем буфер логгера и логируем событие.
+            // b.reload() вызывал race condition в SettingsGyver, т.к. buildInterface
+            // вызывается из onBuild() во время обработки POST-запроса.
+            webLogger.clear();
             sysLog("info:", "СИСТЕМА", "История логов успешно очищена.");
-            b.reload(); 
         }
     }
 }
