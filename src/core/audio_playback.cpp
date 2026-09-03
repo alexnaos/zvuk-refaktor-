@@ -4,8 +4,71 @@
 #include "../mqtt_module.h" 
 #include "system_logger.h"
 #include <SPI.h>
+#include <WiFi.h>
 
 VS1053* player = nullptr;
+
+// ============================================================================
+// АВТОВОССТАНОВЛЕНИЕ ПОТОКА (лечение "тихой смерти" через 2-5 часов работы)
+// ============================================================================
+// Библиотека vs1053_ext при потере потока пытается переподключиться сама
+// (streamDetection -> connecttohost(m_lastHost)), НО при первой неудаче
+// обнуляет m_lastHost и окончательно останавливается (m_f_running=false).
+// Приложение должно само отслеживать состояние плеера и поднимать поток.
+static String       currentStreamUrl = "";    // URL активного потока для автовосстановления
+static bool         userStopRequested = false;// Поток остановлен пользователем — не переподключаться
+static unsigned long lastReconnectAttempt = 0;
+static int          reconnectAttempts = 0;
+
+void notifyUserStop() {
+    userStopRequested = true;
+    reconnectAttempts = 0;
+    sysLog("info:", "ПЛЕЕР", "Поток остановлен пользователем (автопереподключение отключено)");
+}
+
+// Периодический контроль: если плеер должен играть, но молчит — переподключаемся
+static void ensureStreamAlive() {
+    if (player == nullptr || isRecording) return;
+    if (currentStreamUrl.length() == 0) return;   // нет запущенного потока
+    if (userStopRequested) return;                // пользователь остановил сам
+    if (WiFi.status() != WL_CONNECTED) return;    // сеть не готова — подождём Wi-Fi watchdog
+
+    if (player->isRunning()) {
+        // Поток жив (библиотека сама успешно переподключилась) — сбрасываем счётчик
+        if (reconnectAttempts != 0) reconnectAttempts = 0;
+        return;
+    }
+
+    // Плеер молчит при активном потоке — это и есть "тихая смерть"
+    if (millis() - lastReconnectAttempt < STREAM_RECONNECT_INTERVAL_MS) return;
+    lastReconnectAttempt = millis();
+    reconnectAttempts++;
+
+    if (reconnectAttempts > MAX_STREAM_RECONNECT_ATTEMPTS) {
+        // Вероятная причина устойчивого отказа — фрагментация кучи (не выделяется
+        // память под TCP/TLS). Перезагрузка очищает кучу и восстанавливает станцию из БД.
+        sysLog("err:", "АВТОРЕКОННЕКТ", "Поток не восстановлен за " + String(MAX_STREAM_RECONNECT_ATTEMPTS) +
+               " попыток. Перезагрузка для очистки ОЗУ...");
+        delay(300);
+        ESP.restart();
+    }
+
+    sysLog("warn:", "АВТОРЕКОННЕКТ", "Плеер остановлен (обрыв потока). Попытка #" +
+           String(reconnectAttempts) + ": " + currentStreamUrl);
+
+    bool ok = player->connecttohost(currentStreamUrl.c_str());
+    if (ok) {
+        player->setVolume(currentVolume);
+        uint8_t toneData[] = { (uint8_t)currentTreble, 6, (uint8_t)currentBass, 5 };
+        player->setTone(toneData);
+        reconnectAttempts = 0;
+        sysLog("info:", "АВТОРЕКОННЕКТ", "Поток успешно восстановлен");
+    } else {
+        sysLog("err:", "АВТОРЕКОННЕКТ", "Не удалось подключиться (осталось попыток: " +
+               String(MAX_STREAM_RECONNECT_ATTEMPTS - reconnectAttempts) + ")");
+    }
+}
+
 
 // ============================================================================
 // ДИАГНОСТИЧЕСКИЙ ЛОГ VS1053
@@ -134,6 +197,12 @@ void initAudio() {
     player = new VS1053(VS1053_CS, VS1053_DCS, VS1053_DREQ, HSPI, PIN_SPI_MOSI, PIN_SPI_MISO, PIN_SPI_SCK);
     player->begin();
     
+    // ИСПРАВЛЕНО (деградация через часы работы): таймаут подключения по умолчанию
+    // в библиотеке всего 250 мс (HTTP). При кратковременной деградации сети/DNS
+    // реконнект к станции не успевал установиться, и библиотека окончательно
+    // останавливалась. Увеличиваем таймауты: HTTP 6 сек, HTTPS 16 сек.
+    player->setConnectionTimeout(6000, 16000);
+    
     unsigned long tInit = millis() - tStart;
     
     // Диагностика после begin()
@@ -182,13 +251,26 @@ void initAudio() {
 
 void startRadioStream(const char* url) {
     if (player != nullptr && !isRecording) {
+        // Запоминаем URL для автовосстановления и сбрасываем состояние реконнекта
+        currentStreamUrl = String(url);
+        userStopRequested = false;
+        reconnectAttempts = 0;
+        lastReconnectAttempt = millis();
+        
         currentTrack = "Loading...";
         mqttPublishTrack(currentTrack.c_str());
         
         sysLog("info:", "ПЛЕЕР", "Подключение к: " + String(url));
         
-        player->connecttohost(url);
-        player->setVolume(currentVolume);
+        // ИСПРАВЛЕНО: результат подключения теперь проверяется. Раньше при неудаче
+        // устройство показывало "PLAYING", но поток не поднимался и не повторялся.
+        bool ok = player->connecttohost(url);
+        if (ok) {
+            player->setVolume(currentVolume);
+        } else {
+            sysLog("err:", "ПЛЕЕР", "Подключение не удалось. Автоповтор через " +
+                   String(STREAM_RECONNECT_INTERVAL_MS / 1000) + " сек.");
+        }
         
         // Сразу после запуска потока — диагностика
         logVS1053Registers();
@@ -244,7 +326,12 @@ void loopAudioPlayback() {
     if (player != nullptr && !isRecording) {
         player->loop();
         
-        // Диагностика VS1053 каждые 5 секунд
+        // ГЛАВНОЕ ЛЕЧЕНИЕ "ТИХОЙ СМЕРТИ": если поток должен играть, но плеер
+        // остановлен (сервер закрыл соединение, неудачный реконнект библиотеки,
+        // реинициализация после SPI-сбоя) — поднимаем поток заново.
+        ensureStreamAlive();
+        
+        // Диагностика VS1053 каждые 30 секунд
         if (millis() - lastDiagLog > DIAG_LOG_INTERVAL_MS) {
             lastDiagLog = millis();
             logVS1053Registers();
@@ -252,6 +339,8 @@ void loopAudioPlayback() {
         
         // Автоматическая проверка "зависания" шины SPI декодера
         // Раз в 30 секунд читаем статус громкости. Если на проводах наводка — чип вернет > 254.
+        // ИСПРАВЛЕНО: после реинициализации чипа поток теперь НЕ теряется навсегда —
+        // ensureStreamAlive() выше сам переподключит его на следующем цикле.
         static unsigned long lastHardwareCheck = 0;
         if (millis() - lastHardwareCheck > HARDWARE_CHECK_INTERVAL_MS) {
             lastHardwareCheck = millis();

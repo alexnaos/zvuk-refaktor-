@@ -91,6 +91,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     } else if (body == "stop") {
         currentMqttStatus = "stopped";
         changeStationFlag = false;
+        notifyUserStop(); // Отключаем автопереподключение потока
         if (player != nullptr) player->stop_mp3client();
     } else if (body == "start" || body == "play") {
         currentMqttStatus = "playing";
@@ -98,6 +99,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     } else if (body == "turnoff") {
         currentMqttStatus = "stopped";
         changeStationFlag = false;
+        notifyUserStop(); // Отключаем автопереподключение потока
         if (player != nullptr) player->stop_mp3client();
     }
     mqttPublishStatus();

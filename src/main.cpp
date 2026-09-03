@@ -76,16 +76,23 @@ void systemHealthMonitor() {
     lastHealthMonitor = now;
     
     uint32_t freeHeap = ESP.getFreeHeap();
+    // ИСПРАВЛЕНО (деградация через часы работы): контролируем не только свободную
+    // ОЗУ, но и максимальный непрерывный блок (maxAllocHeap). При фрагментации кучи
+    // freeHeap может быть > 20 КБ, а непрерывный блок уже меньше, чем нужен для
+    // TCP/TLS-соединения — именно поэтому радио "переставало принимать станции".
+    uint32_t maxBlock = ESP.getMaxAllocHeap();
     
-    // Если ОЗУ < 20 КБ — критично, пытаемся освободить память
-    if (freeHeap < 20000) {
-        sysLog("warn:", "WATCHDOG", "Критически мало ОЗУ: " + String(freeHeap) + " Б. Очистка...");
+    // Если ОЗУ < 20 КБ или непрерывный блок < 20 КБ — критично, пытаемся освободить память
+    if (freeHeap < 20000 || maxBlock < 20000) {
+        sysLog("warn:", "WATCHDOG", "Критически мало ОЗУ: " + String(freeHeap) +
+               " Б (макс. блок: " + String(maxBlock) + " Б). Очистка...");
         // Принудительно очищаем буфер логгера для освобождения памяти
         webLogger.clear();
         
         // Если всё еще мало — инициируем перезагрузку
-        if (ESP.getFreeHeap() < 15000) {
-            sysLog("err:", "WATCHDOG", "ОЗУ исчерпано (" + String(ESP.getFreeHeap()) + " Б). Аварийная перезагрузка...");
+        if (ESP.getFreeHeap() < 15000 || ESP.getMaxAllocHeap() < 15000) {
+            sysLog("err:", "WATCHDOG", "ОЗУ исчерпано (free=" + String(ESP.getFreeHeap()) +
+                   " Б, блок=" + String(ESP.getMaxAllocHeap()) + " Б). Аварийная перезагрузка...");
             delay(100);
             ESP.restart();
         }

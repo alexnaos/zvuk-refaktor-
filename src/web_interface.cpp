@@ -53,6 +53,7 @@ void buildInterface(sets::Builder &b) {
             }
             if (b.Button("⏹ Стоп")) {
                 changeStationFlag = false;
+                notifyUserStop(); // Отключаем автопереподключение потока
                 if (player != nullptr) player->stop_mp3client();
             }
             if (b.Button("⏭ Вперед")) {

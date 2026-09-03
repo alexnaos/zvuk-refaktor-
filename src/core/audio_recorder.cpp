@@ -14,6 +14,10 @@ void startRecording() {
     if (player == nullptr || isRecording) return;
     sysLog("info:", "ЗАПИСЬ", "Запуск аппаратной записи звука...");
     
+    // Запись останавливает воспроизведение по воле пользователя:
+    // отключаем автопереподключение потока на время записи
+    notifyUserStop();
+    
     // Удаляем старую запись, если она существует
     if (LittleFS.exists("/record.wav")) {
         LittleFS.remove("/record.wav");
